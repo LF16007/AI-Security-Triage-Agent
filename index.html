@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Triage Alert Dashboard</title>
+    <style>
+      :root {
+        --bg: #0f172a;
+        --panel: #111827;
+        --muted: #94a3b8;
+        --good: #22c55e;
+        --bad: #ef4444;
+        --text: #e5e7eb;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+
+      .container {
+        max-width: 1000px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+
+      .hud {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        margin-bottom: 14px;
+      }
+
+      .hud-pill {
+        background: rgba(17, 24, 39, 0.8);
+        border: 1px solid #334155;
+        border-radius: 8px;
+        padding: 8px 10px;
+      }
+
+      .hud-label {
+        font-size: 0.72rem;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+
+      .hud-value {
+        margin-top: 3px;
+        font-size: 0.95rem;
+        font-weight: 600;
+      }
+
+      .header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 20px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 1.4rem;
+      }
+
+      .controls {
+        display: flex;
+        gap: 10px;
+      }
+
+      button {
+        border: 0;
+        border-radius: 8px;
+        padding: 10px 14px;
+        background: #1f2937;
+        color: var(--text);
+        cursor: pointer;
+      }
+
+      button.primary {
+        background: #2563eb;
+      }
+
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+        margin-bottom: 18px;
+      }
+
+      .card {
+        background: var(--panel);
+        border-radius: 10px;
+        padding: 14px;
+        border: 1px solid #263247;
+      }
+
+      .metric {
+        font-size: 1.4rem;
+        font-weight: 700;
+        margin-top: 4px;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+      }
+
+      .list {
+        background: var(--panel);
+        border-radius: 10px;
+        border: 1px solid #263247;
+        padding: 14px;
+        min-height: 380px;
+        overflow: auto;
+      }
+
+      .item {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 0.86rem;
+        border-bottom: 1px dashed #2b3549;
+        padding: 8px 0;
+      }
+
+      .item:last-child {
+        border-bottom: 0;
+      }
+
+      .level-ok {
+        color: var(--good);
+      }
+
+      .level-bad {
+        color: var(--bad);
+      }
+
+      .alerts {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .alert-box {
+        background: rgba(239, 68, 68, 0.15);
+        border: 1px solid var(--bad);
+        border-left: 6px solid var(--bad);
+        border-radius: 8px;
+        padding: 10px;
+        animation: pop 0.22s ease-out;
+      }
+
+      .alert-title {
+        font-size: 0.92rem;
+        font-weight: 700;
+      }
+
+      .alert-meta {
+        font-size: 0.8rem;
+        color: #fecaca;
+      }
+
+      @keyframes pop {
+        0% {
+          transform: translateY(6px);
+          opacity: 0;
+        }
+        100% {
+          transform: translateY(0);
+          opacity: 1;
+        }
+      }
+
+      @media (max-width: 900px) {
+        .hud {
+          grid-template-columns: 1fr 1fr;
+        }
+
+        .cards {
+          grid-template-columns: 1fr;
+        }
+
+        .layout {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="hud">
+        <div class="hud-pill">
+          <div class="hud-label">Status</div>
+          <div class="hud-value" id="hudStatus">Monitoring</div>
+        </div>
+        <div class="hud-pill">
+          <div class="hud-label">Alert Rate</div>
+          <div class="hud-value" id="hudRate">0%</div>
+        </div>
+        <div class="hud-pill">
+          <div class="hud-label">Last Alert</div>
+          <div class="hud-value" id="hudLastAlert">None</div>
+        </div>
+        <div class="hud-pill">
+          <div class="hud-label">Audio</div>
+          <div class="hud-value" id="hudAudio">Soft Chime</div>
+        </div>
+      </div>
+
+      <div class="header">
+        <h1>AI Triage Dashboard</h1>
+        <div class="controls">
+          <button class="primary" id="toggle">Pause</button>
+          <button id="clear">Clear Alerts</button>
+        </div>
+      </div>
+
+      <div class="cards">
+        <div class="card">
+          <div>Total Logs</div>
+          <div class="metric" id="totalLogs">0</div>
+        </div>
+        <div class="card">
+          <div>Bad Logs Detected</div>
+          <div class="metric" id="badLogs">0</div>
+        </div>
+        <div class="card">
+          <div>Alert Boxes Spawned</div>
+          <div class="metric" id="alertsSpawned">0</div>
+        </div>
+      </div>
+
+      <div class="layout">
+        <div class="list" id="logStream" aria-live="polite"></div>
+        <div class="list">
+          <div class="alerts" id="alerts" aria-live="assertive"></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const logStreamEl = document.getElementById("logStream");
+      const alertsEl = document.getElementById("alerts");
+      const totalLogsEl = document.getElementById("totalLogs");
+      const badLogsEl = document.getElementById("badLogs");
+      const alertsSpawnedEl = document.getElementById("alertsSpawned");
+      const toggleBtn = document.getElementById("toggle");
+      const clearBtn = document.getElementById("clear");
+      const hudStatusEl = document.getElementById("hudStatus");
+      const hudRateEl = document.getElementById("hudRate");
+      const hudLastAlertEl = document.getElementById("hudLastAlert");
+      const hudAudioEl = document.getElementById("hudAudio");
+
+      const services = ["auth-api", "payments", "chat-service", "db-worker", "gateway"];
+      const cleanMessages = [
+        "Request completed",
+        "Heartbeat OK",
+        "Cache refreshed",
+        "Session validated",
+        "Worker cycle finished"
+      ];
+      const badMessages = [
+        "Unauthorized access attempt",
+        "SQL injection pattern detected",
+        "Repeated failed login burst",
+        "Critical service timeout",
+        "Unexpected privilege escalation"
+      ];
+
+      let totalLogs = 0;
+      let badLogs = 0;
+      let alertsSpawned = 0;
+      let running = true;
+      let lastAlertTime = "None";
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      const audioContext = AudioCtx ? new AudioCtx() : null;
+
+      function now() {
+        return new Date().toLocaleTimeString();
+      }
+
+      function randomFrom(arr) {
+        return arr[Math.floor(Math.random() * arr.length)];
+      }
+
+      function updateCounters() {
+        totalLogsEl.textContent = String(totalLogs);
+        badLogsEl.textContent = String(badLogs);
+        alertsSpawnedEl.textContent = String(alertsSpawned);
+        const badRate = totalLogs === 0 ? 0 : (badLogs / totalLogs) * 100;
+        hudRateEl.textContent = `${badRate.toFixed(1)}%`;
+        hudStatusEl.textContent = running ? "Monitoring" : "Paused";
+        hudLastAlertEl.textContent = lastAlertTime;
+        hudAudioEl.textContent = audioContext ? "Soft Chime" : "Unavailable";
+      }
+
+      function playAlertChime() {
+        if (!audioContext) return;
+
+        if (audioContext.state === "suspended") {
+          audioContext.resume().catch(() => {});
+        }
+
+        const now = audioContext.currentTime;
+        const oscillatorA = audioContext.createOscillator();
+        const gainA = audioContext.createGain();
+        oscillatorA.type = "sine";
+        oscillatorA.frequency.setValueAtTime(523.25, now);
+        gainA.gain.setValueAtTime(0.0001, now);
+        gainA.gain.exponentialRampToValueAtTime(0.035, now + 0.03);
+        gainA.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
+        oscillatorA.connect(gainA);
+        gainA.connect(audioContext.destination);
+        oscillatorA.start(now);
+        oscillatorA.stop(now + 0.29);
+
+        const oscillatorB = audioContext.createOscillator();
+        const gainB = audioContext.createGain();
+        oscillatorB.type = "triangle";
+        oscillatorB.frequency.setValueAtTime(659.25, now + 0.16);
+        gainB.gain.setValueAtTime(0.0001, now + 0.16);
+        gainB.gain.exponentialRampToValueAtTime(0.028, now + 0.2);
+        gainB.gain.exponentialRampToValueAtTime(0.0001, now + 0.4);
+        oscillatorB.connect(gainB);
+        gainB.connect(audioContext.destination);
+        oscillatorB.start(now + 0.16);
+        oscillatorB.stop(now + 0.41);
+      }
+
+      function appendLog(entry) {
+        const line = document.createElement("div");
+        line.className = "item";
+        line.innerHTML = `[${entry.time}] <span class="${entry.bad ? "level-bad" : "level-ok"}">${entry.level}</span> ${entry.service}: ${entry.message}`;
+        logStreamEl.prepend(line);
+
+        while (logStreamEl.children.length > 40) {
+          logStreamEl.removeChild(logStreamEl.lastChild);
+        }
+      }
+
+      function spawnAlert(entry) {
+        const box = document.createElement("div");
+        box.className = "alert-box";
+        box.innerHTML = `
+          <div class="alert-title">RED ALERT: Bad log detected</div>
+          <div>${entry.service}: ${entry.message}</div>
+          <div class="alert-meta">${entry.time}</div>
+        `;
+        alertsEl.prepend(box);
+        alertsSpawned += 1;
+        lastAlertTime = entry.time;
+        playAlertChime();
+      }
+
+      function generateLog() {
+        if (!running) return;
+
+        const isBad = Math.random() < 0.32;
+        const entry = {
+          time: now(),
+          service: randomFrom(services),
+          level: isBad ? "ERROR" : "INFO",
+          message: isBad ? randomFrom(badMessages) : randomFrom(cleanMessages),
+          bad: isBad
+        };
+
+        totalLogs += 1;
+        if (isBad) {
+          badLogs += 1;
+          spawnAlert(entry);
+        }
+
+        appendLog(entry);
+        updateCounters();
+      }
+
+      toggleBtn.addEventListener("click", () => {
+        running = !running;
+        toggleBtn.textContent = running ? "Pause" : "Resume";
+      });
+
+      clearBtn.addEventListener("click", () => {
+        alertsEl.innerHTML = "";
+        alertsSpawned = 0;
+        updateCounters();
+      });
+
+      document.addEventListener(
+        "pointerdown",
+        () => {
+          if (audioContext && audioContext.state === "suspended") {
+            audioContext.resume().catch(() => {});
+          }
+        },
+        { once: true }
+      );
+
+      updateCounters();
+      setInterval(generateLog, 900);
+    </script>
+  </body>
+</html>
