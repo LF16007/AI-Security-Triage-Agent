@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Iterator
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -101,36 +102,95 @@ def explain_threat_with_llm(attack_type: str, log_line: str) -> str:
     return " ".join(message.strip().split())
 
 
-def follow_file(path: Path):
+def follow_log_tail(
+    path: Path,
+    *,
+    poll_interval: float = POLL_INTERVAL_SECONDS,
+    start_at_end: bool = True,
+) -> Iterator[str]:
     """
-    Yield new lines appended to file, similar to `tail -f`.
-    If file doesn't exist yet, wait until it appears.
+    Continuously yield new lines appended to `path`, like Linux `tail -f`.
+
+    Blocks forever on the open file: seeks to EOF (when ``start_at_end`` is
+    True), then reads line-by-line, sleeping briefly when no data is ready.
+    If the file does not exist yet, waits until it appears.
     """
     while not path.exists():
         print(f"Waiting for log file: {path.resolve()}")
-        time.sleep(POLL_INTERVAL_SECONDS)
+        time.sleep(poll_interval)
 
     with path.open("r", encoding="utf-8") as handle:
-        handle.seek(0, os.SEEK_END)  # Read only new incoming entries.
+        if start_at_end:
+            handle.seek(0, os.SEEK_END)
         while True:
             line = handle.readline()
             if not line:
-                time.sleep(POLL_INTERVAL_SECONDS)
+                time.sleep(poll_interval)
                 continue
             yield line.rstrip("\n")
 
 
+def follow_security_traffic_log(
+    *,
+    poll_interval: float = POLL_INTERVAL_SECONDS,
+    start_at_end: bool = True,
+) -> Iterator[str]:
+    """
+    Monitor ``security_traffic.log`` for new lines without exiting, ``tail -f`` style.
+
+    Yields each complete line as it is appended. Runs until the process is
+    interrupted (e.g. Ctrl+C).
+    """
+    yield from follow_log_tail(
+        LOG_FILE,
+        poll_interval=poll_interval,
+        start_at_end=start_at_end,
+    )
+
+
 def main() -> None:
+    import json
+
     print(f"Monitoring: {LOG_FILE.resolve()}")
     print(f"Using model: {LLM_MODEL}")
     print("Waiting for RED ALERT entries...\n")
 
-    for line in follow_file(LOG_FILE):
+    for line in follow_security_traffic_log():
         if "RED ALERT" not in line:
             continue
 
         attack_type = extract_attack_type(line)
-        explanation = explain_threat_with_llm(attack_type, line)
+        response = explain_threat_with_llm(attack_type, line)
+
+        risk_level = "UNKNOWN"
+        fintech_impact = "No impact assessment provided."
+
+        if isinstance(response, dict):
+            risk_level = response.get("risk_level", "UNKNOWN")
+            fintech_impact = response.get("fintech_impact", "No impact assessment provided.")
+        elif isinstance(response, str):
+            try:
+                parsed = json.loads(response)
+                if isinstance(parsed, dict):
+                    risk_level = parsed.get("risk_level", "UNKNOWN")
+                    fintech_impact = parsed.get("fintech_impact", "No impact assessment provided.")
+                else:
+                    # Not a dict, treat as plain text
+                    risk_level = "HIGH"
+                    fintech_impact = response
+            except Exception:
+                # Failed to parse as JSON, treat as fintech_impact text
+                risk_level = "HIGH"
+                fintech_impact = response
+        else:
+            fintech_impact = str(response)
+            risk_level = "HIGH"
+
+        # Format output: bold blue (ANSI: \033[1;34m ... \033[0m)
+        explanation = (
+            f"\033[1;34mRisk Level: {risk_level}\033[0m\n"
+            f"\033[1;34mFintech Impact: {fintech_impact}\033[0m"
+        )
         print(f"[RED ALERT] {attack_type}")
         print(f"Threat explanation: {explanation}\n")
 
