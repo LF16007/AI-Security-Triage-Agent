@@ -2,9 +2,8 @@
 """
 Real-time RED ALERT analyzer for security_traffic.log.
 
-Whenever a RED ALERT line is appended to the log file, this script calls an
-LLM API to generate a one-sentence explanation of why that specific attack is
-a threat to a London business.
+Whenever a RED ALERT line is appended to the log file, this script creates a
+local triage assessment and appends it to triage_report.json.
 """
 
 from __future__ import annotations
@@ -13,18 +12,15 @@ import json
 import os
 import time
 from collections.abc import Iterator
-import urllib.error
-import urllib.request
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 
 LOG_FILE = Path("security_traffic.log")
+REPORT_FILE = Path("triage_report.json")
 POLL_INTERVAL_SECONDS = 1.0
-
-# OpenAI-compatible Chat Completions endpoint.
-LLM_API_URL = os.getenv("LLM_API_URL", "https://api.openai.com/v1/chat/completions")
-LLM_API_KEY = os.getenv("LLM_API_KEY", "")
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
+LONDON_TZ = ZoneInfo("Europe/London")
 
 
 def extract_attack_type(log_line: str) -> str:
@@ -39,67 +35,107 @@ def extract_attack_type(log_line: str) -> str:
     return "Unknown attack"
 
 
-def build_prompt(attack_type: str, log_line: str) -> str:
-    """Create a focused prompt for one-sentence threat explanation."""
-    return (
-        "You are a cybersecurity analyst.\n"
-        "In exactly one sentence, explain why this attack is a threat to a London business.\n"
-        f"Attack type: {attack_type}\n"
-        f"Log line: {log_line}\n"
-        "Keep it practical and concise."
+def current_london_time() -> str:
+    """Return current London timestamp."""
+    return datetime.now(LONDON_TZ).strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+def determine_risk_level(attack_type: str) -> str:
+    """Classify risk based on attack type and triage policy."""
+    normalized = attack_type.lower()
+    high_risk_keywords = (
+        "sql injection",
+        "unauthorized access",
+        "privilege escalation",
+        "suspicious payload",
     )
+    medium_risk_keywords = ("credential stuffing", "brute force", "recon")
+
+    if any(keyword in normalized for keyword in high_risk_keywords):
+        return "HIGH"
+    if any(keyword in normalized for keyword in medium_risk_keywords):
+        return "MEDIUM"
+    return "MEDIUM"
 
 
-def explain_threat_with_llm(attack_type: str, log_line: str) -> str:
-    """Call the LLM API and return a one-sentence explanation."""
-    if not LLM_API_KEY:
-        return (
-            "Missing LLM_API_KEY, so no model explanation was generated; "
-            f"{attack_type} can still disrupt business operations and trust."
+def build_fintech_impact(attack_type: str, risk_level: str) -> dict[str, str]:
+    """Build detailed impact statements for London banking standards."""
+    normalized = attack_type.lower()
+
+    if "sql injection" in normalized:
+        regulatory = (
+            "Potential compromise of customer and transaction records can trigger FCA/PRA "
+            "major incident assessment, expedited governance escalation, and formal breach "
+            "documentation under UK financial-services control expectations."
+        )
+        operational = (
+            "Tampered or exfiltrated database records may corrupt balances, payment states, "
+            "and reconciliation flows, creating a material risk to real-time clearing, "
+            "settlement, and end-of-day reporting continuity."
+        )
+        trust = (
+            "Exposure of account or identity data can drive customer churn, complaints, and "
+            "reputational loss, especially where London retail and SME clients expect "
+            "high-integrity digital banking channels."
+        )
+    elif "unauthorized access" in normalized:
+        regulatory = (
+            "Unauthorized account or system entry indicates control failure across access "
+            "management, requiring prompt FCA/PRA-impact evaluation, evidence retention, "
+            "and board-level risk oversight updates."
+        )
+        operational = (
+            "Compromised credentials can enable fraudulent transactions or malicious admin "
+            "changes, disrupting core banking operations, incident response workloads, and "
+            "service availability obligations."
+        )
+        trust = (
+            "Customers interpret unauthorized access as direct failure of safeguarding duties, "
+            "reducing confidence in secure custody of funds and personal data."
+        )
+    else:
+        regulatory = (
+            "This attack pattern suggests a material cyber threat that should be assessed "
+            "against FCA/PRA incident thresholds, internal operational resilience controls, "
+            "and mandatory audit-trace requirements."
+        )
+        operational = (
+            "Unchecked malicious activity can degrade authentication, transaction integrity, "
+            "or platform stability, impacting payment timeliness and critical business services."
+        )
+        trust = (
+            "Repeated hostile activity increases perceived fragility of the bank's digital "
+            "channels and may reduce customer willingness to transact online."
         )
 
-    payload = {
-        "model": LLM_MODEL,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You explain cyber threats for business stakeholders in one sentence."
-                ),
-            },
-            {"role": "user", "content": build_prompt(attack_type, log_line)},
-        ],
-        "temperature": 0.2,
-        "max_tokens": 80,
-    }
-
-    request = urllib.request.Request(
-        LLM_API_URL,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {LLM_API_KEY}",
-        },
-        method="POST",
+    summary = (
+        f"{attack_type} is a {risk_level} threat because it can create regulatory exposure "
+        "under London financial oversight, disrupt transaction continuity, and undermine "
+        "customer trust in secure banking operations."
     )
 
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            response_data = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        error_body = exc.read().decode("utf-8", errors="replace")
-        return f"LLM API HTTP error {exc.code}: {error_body}"
-    except urllib.error.URLError as exc:
-        return f"LLM API connection error: {exc.reason}"
-    except TimeoutError:
-        return "LLM API timeout error."
+    return {
+        "summary": summary,
+        "regulatory_compliance": regulatory,
+        "operational_continuity": operational,
+        "customer_trust": trust,
+    }
 
-    try:
-        message = response_data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError):
-        return f"Unexpected LLM API response: {response_data}"
 
-    return " ".join(message.strip().split())
+def write_report_entry(entry: dict[str, object], report_path: Path = REPORT_FILE) -> None:
+    """Append one RED ALERT triage entry to a local JSON report file."""
+    if report_path.exists():
+        try:
+            existing = json.loads(report_path.read_text(encoding="utf-8"))
+            if not isinstance(existing, list):
+                existing = []
+        except json.JSONDecodeError:
+            existing = []
+    else:
+        existing = []
+
+    existing.append(entry)
+    report_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
 
 
 def follow_log_tail(
@@ -149,10 +185,8 @@ def follow_security_traffic_log(
 
 
 def main() -> None:
-    import json
-
     print(f"Monitoring: {LOG_FILE.resolve()}")
-    print(f"Using model: {LLM_MODEL}")
+    print(f"Writing report to: {REPORT_FILE.resolve()}")
     print("Waiting for RED ALERT entries...\n")
 
     for line in follow_security_traffic_log():
@@ -160,39 +194,22 @@ def main() -> None:
             continue
 
         attack_type = extract_attack_type(line)
-        response = explain_threat_with_llm(attack_type, line)
+        risk_level = determine_risk_level(attack_type)
+        fintech_impact = build_fintech_impact(attack_type, risk_level)
 
-        risk_level = "UNKNOWN"
-        fintech_impact = "No impact assessment provided."
+        entry: dict[str, object] = {
+            "observed_at_london": current_london_time(),
+            "attack_type": attack_type,
+            "risk_level": risk_level,
+            "raw_log": line,
+            "fintech_impact": fintech_impact,
+        }
+        write_report_entry(entry)
 
-        if isinstance(response, dict):
-            risk_level = response.get("risk_level", "UNKNOWN")
-            fintech_impact = response.get("fintech_impact", "No impact assessment provided.")
-        elif isinstance(response, str):
-            try:
-                parsed = json.loads(response)
-                if isinstance(parsed, dict):
-                    risk_level = parsed.get("risk_level", "UNKNOWN")
-                    fintech_impact = parsed.get("fintech_impact", "No impact assessment provided.")
-                else:
-                    # Not a dict, treat as plain text
-                    risk_level = "HIGH"
-                    fintech_impact = response
-            except Exception:
-                # Failed to parse as JSON, treat as fintech_impact text
-                risk_level = "HIGH"
-                fintech_impact = response
-        else:
-            fintech_impact = str(response)
-            risk_level = "HIGH"
-
-        # Format output: bold blue (ANSI: \033[1;34m ... \033[0m)
-        explanation = (
-            f"\033[1;34mRisk Level: {risk_level}\033[0m\n"
-            f"\033[1;34mFintech Impact: {fintech_impact}\033[0m"
-        )
         print(f"[RED ALERT] {attack_type}")
-        print(f"Threat explanation: {explanation}\n")
+        print(f"Risk Level: {risk_level}")
+        print(f"Fintech Impact: {fintech_impact['summary']}")
+        print("Saved to triage_report.json\n")
 
 
 if __name__ == "__main__":
