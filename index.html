@@ -89,6 +89,21 @@
         background: #2563eb;
       }
 
+      .speaker-button {
+        display: inline-grid;
+        place-items: center;
+        width: 40px;
+        height: 40px;
+        padding: 0;
+        border-radius: 999px;
+        font-size: 1.15rem;
+        background: #1f2937;
+      }
+
+      .speaker-button[aria-pressed="true"] {
+        background: #2563eb;
+      }
+
       .cards {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -218,6 +233,7 @@
       <div class="header">
         <h1>AI Triage Dashboard</h1>
         <div class="controls">
+          <button class="speaker-button" id="audioToggle" aria-label="Unmute alert sounds" aria-pressed="false">🔇</button>
           <button class="primary" id="toggle">Pause</button>
           <button id="clear">Clear Alerts</button>
         </div>
@@ -252,6 +268,7 @@
       const totalLogsEl = document.getElementById("totalLogs");
       const badLogsEl = document.getElementById("badLogs");
       const alertsSpawnedEl = document.getElementById("alertsSpawned");
+      const audioToggleBtn = document.getElementById("audioToggle");
       const toggleBtn = document.getElementById("toggle");
       const clearBtn = document.getElementById("clear");
       const hudStatusEl = document.getElementById("hudStatus");
@@ -280,8 +297,9 @@
       let alertsSpawned = 0;
       let running = true;
       let lastAlertTime = "None";
+      let audioMuted = true;
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      const audioContext = AudioCtx ? new AudioCtx() : null;
+      let audioContext = null;
 
       function now() {
         return new Date().toLocaleTimeString();
@@ -299,40 +317,59 @@
         hudRateEl.textContent = `${badRate.toFixed(1)}%`;
         hudStatusEl.textContent = running ? "Monitoring" : "Paused";
         hudLastAlertEl.textContent = lastAlertTime;
-        hudAudioEl.textContent = audioContext ? "Soft Chime" : "Unavailable";
+        hudAudioEl.textContent = AudioCtx
+          ? audioMuted
+            ? "Muted"
+            : "Soft Chime"
+          : "Unavailable";
+        audioToggleBtn.textContent = audioMuted ? "🔇" : "🔊";
+        audioToggleBtn.setAttribute("aria-label", audioMuted ? "Unmute alert sounds" : "Mute alert sounds");
+        audioToggleBtn.setAttribute("aria-pressed", String(!audioMuted));
+        audioToggleBtn.disabled = !AudioCtx;
+      }
+
+      async function enableAudio() {
+        if (!AudioCtx) return;
+
+        if (!audioContext || audioContext.state === "closed") {
+          audioContext = new AudioCtx();
+        }
+
+        if (audioContext.state === "suspended") {
+          await audioContext.resume();
+        }
+
+        audioMuted = audioContext.state !== "running";
+        updateCounters();
       }
 
       function playAlertChime() {
-        if (!audioContext) return;
+        if (!audioContext || audioMuted || audioContext.state !== "running") return;
 
-        if (audioContext.state === "suspended") {
-          audioContext.resume().catch(() => {});
-        }
-
-        const now = audioContext.currentTime;
+        const startTime = audioContext.currentTime + 0.01;
         const oscillatorA = audioContext.createOscillator();
         const gainA = audioContext.createGain();
         oscillatorA.type = "sine";
-        oscillatorA.frequency.setValueAtTime(523.25, now);
-        gainA.gain.setValueAtTime(0.0001, now);
-        gainA.gain.exponentialRampToValueAtTime(0.035, now + 0.03);
-        gainA.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
+        oscillatorA.frequency.setValueAtTime(523.25, startTime);
+        gainA.gain.setValueAtTime(0.0001, startTime);
+        gainA.gain.exponentialRampToValueAtTime(0.035, startTime + 0.03);
+        gainA.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.28);
         oscillatorA.connect(gainA);
         gainA.connect(audioContext.destination);
-        oscillatorA.start(now);
-        oscillatorA.stop(now + 0.29);
+        oscillatorA.start(startTime);
+        oscillatorA.stop(startTime + 0.29);
 
         const oscillatorB = audioContext.createOscillator();
         const gainB = audioContext.createGain();
         oscillatorB.type = "triangle";
-        oscillatorB.frequency.setValueAtTime(659.25, now + 0.16);
-        gainB.gain.setValueAtTime(0.0001, now + 0.16);
-        gainB.gain.exponentialRampToValueAtTime(0.028, now + 0.2);
-        gainB.gain.exponentialRampToValueAtTime(0.0001, now + 0.4);
+        oscillatorB.frequency.setValueAtTime(659.25, startTime + 0.16);
+        gainB.gain.setValueAtTime(0.0001, startTime + 0.16);
+        gainB.gain.exponentialRampToValueAtTime(0.028, startTime + 0.2);
+        gainB.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.4);
         oscillatorB.connect(gainB);
         gainB.connect(audioContext.destination);
-        oscillatorB.start(now + 0.16);
-        oscillatorB.stop(now + 0.41);
+        oscillatorB.start(startTime + 0.16);
+        oscillatorB.stop(startTime + 0.41);
       }
 
       function appendLog(entry) {
@@ -393,15 +430,19 @@
         updateCounters();
       });
 
-      document.addEventListener(
-        "pointerdown",
-        () => {
-          if (audioContext && audioContext.state === "suspended") {
-            audioContext.resume().catch(() => {});
-          }
-        },
-        { once: true }
-      );
+      audioToggleBtn.addEventListener("click", () => {
+        const shouldUnmute = audioMuted;
+        if (!shouldUnmute) {
+          audioMuted = true;
+          updateCounters();
+          return;
+        }
+
+        enableAudio()
+          .catch(() => {
+            hudAudioEl.textContent = "Blocked";
+          });
+      });
 
       updateCounters();
       setInterval(generateLog, 900);
